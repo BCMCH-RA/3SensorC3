@@ -1,0 +1,158 @@
+#include <Wire.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// --- CONFIGURATION PER BOARD ---
+#define DEVICE_NAME "XIAO_RLeg" // Change to "XIAO_LLeg" or "XIAO_Torso" for other nodes
+#define SENSOR_ROLE "rleg"     // Change to "lleg" or "torso" for other nodes
+// -------------------------------
+
+const int MPU_addr = 0x68;
+
+#define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50e24dCCA9E"
+#define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50e24dCCA9E"
+#define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50e24dCCA9E"
+
+BLEServer *pServer = NULL;
+BLECharacteristic *pTxCharacteristic = NULL;
+bool deviceConnected = false;
+
+unsigned long baseEpochMs = 0;
+unsigned long baseMillis = 0;
+bool timeSynced = false;
+
+const unsigned long SAMPLING_INTERVAL_US = 5000; // 200 Hz
+unsigned long lastSampleMicros = 0;
+
+const uint8_t BATCH_SIZE = 5;
+struct SensorSample {
+  uint32_t relative_offset_ms;
+  int16_t ax, ay, az;
+  int16_t gx, gy, gz;
+};
+
+struct BatchPacket {
+  uint32_t seq_start;
+  uint8_t count;
+  SensorSample samples[BATCH_SIZE];
+};
+
+BatchPacket currentBatch;
+uint8_t batchIndex = 0;
+uint32_t globalSeq = 0;
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      Serial.println("Client Connected");
+    }
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+      Serial.println("Client Disconnected");
+      pServer->startAdvertising();
+    }
+};
+
+class MyCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) {
+      String rxValue = pCharacteristic->getValue();
+      if (rxValue.length() >= 4) {
+        // Read the 4 bytes of the epoch timestamp directly from the buffer
+        uint32_t epochReceived = *((uint32_t*)rxValue.c_str());
+        baseEpochMs = epochReceived;
+        baseMillis = millis();
+        timeSynced = true;
+        Serial.print("Time synchronized: ");
+        Serial.println(baseEpochMs);
+      }
+    }
+};
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(D4, D5); // SDA, SCL pins for XIAO ESP32C3
+
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x6B); 
+  Wire.write(0);    
+  Wire.endTransmission(true);
+
+  BLEDevice::init(DEVICE_NAME);
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  
+  pTxCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID_TX,
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  pTxCharacteristic->addDescriptor(new BLE2902());
+
+  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID_RX,
+                      BLECharacteristic::PROPERTY_WRITE
+                    );
+  pRxCharacteristic->setCallbacks(new MyCallbacks());
+
+  pService->start();
+  
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+  
+  Serial.println("Sensor node ready, waiting for connection...");
+  lastSampleMicros = micros();
+}
+
+void loop() {
+  unsigned long currentMicros = micros();
+  
+  if (currentMicros - lastSampleMicros >= SAMPLING_INTERVAL_US) {
+    lastSampleMicros += SAMPLING_INTERVAL_US;
+
+    Wire.beginTransmission(MPU_addr);
+    Wire.write(0x3B);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_addr, 14, true);
+
+    if (Wire.available() >= 14) {
+      int16_t ax = Wire.read() << 8 | Wire.read();
+      int16_t ay = Wire.read() << 8 | Wire.read();
+      int16_t az = Wire.read() << 8 | Wire.read();
+      Wire.read(); Wire.read(); 
+      int16_t gx = Wire.read() << 8 | Wire.read();
+      int16_t gy = Wire.read() << 8 | Wire.read();
+      int16_t gz = Wire.read() << 8 | Wire.read();
+
+      if (batchIndex == 0) {
+        currentBatch.seq_start = globalSeq;
+      }
+
+      unsigned long currentEpoch = timeSynced ? (baseEpochMs + (millis() - baseMillis)) : millis();
+      
+      currentBatch.samples[batchIndex] = {
+        (uint32_t)currentEpoch,
+        ax, ay, az,
+        gx, gy, gz
+      };
+
+      batchIndex++;
+      globalSeq++;
+
+      if (batchIndex >= BATCH_SIZE) {
+        currentBatch.count = BATCH_SIZE;
+        if (deviceConnected) {
+          pTxCharacteristic->setValue((uint8_t*)&currentBatch, sizeof(BatchPacket));
+          pTxCharacteristic->notify();
+        }
+        batchIndex = 0;
+      }
+    }
+  }
+}
