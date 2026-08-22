@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3-Sensor Gait Logger (BLE)</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #171d2b;
+    --panel-border: #2a3244;
+    --accent: #4f8cff;
+    --accent-dim: #2c4a80;
+    --green: #35c37a;
+    --red: #e5484d;
+    --amber: #e5a13d;
+    --text: #e7ebf3;
+    --text-dim: #8b93a7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px 0; }
+  .sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 18px; }
+
+  .sensor-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .sensor-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    font-size: 0.9rem;
+  }
+  .sensor-row .name { font-weight: 600; width: 90px; flex-shrink: 0; }
+  .sensor-row .info { flex: 1; color: var(--text-dim); font-size: 0.8rem; }
+  .sensor-row .row-btn {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .sensor-row .row-btn.disconnect { border-color: var(--red); }
+  .sensor-row .row-btn.disconnect:hover:not(:disabled) { background: var(--red); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+  .dot.connected { background: var(--green); }
+  .dot.recording { background: var(--amber); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 14px 0 18px 0;
+  }
+  button {
+    background: var(--accent-dim);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 12px 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover:not(:disabled) { background: var(--accent); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  #stopBtn { border-color: var(--red); }
+  #stopBtn:hover:not(:disabled) { background: var(--red); }
+  #startBtn { border-color: var(--green); }
+  #startBtn:hover:not(:disabled) { background: var(--green); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat .value { font-size: 1.4rem; font-weight: 700; margin-top: 2px; }
+  .stat.loss .value { color: var(--red); }
+  .stat.good .value { color: var(--green); }
+
+  .per-sensor-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .mini-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.78rem;
+  }
+  .mini-card .title { font-weight: 700; margin-bottom: 6px; }
+  .mini-card .row { display: flex; justify-content: space-between; color: var(--text-dim); padding: 1px 0; }
+  .mini-card .row span:last-child { color: var(--text); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 0.9rem; margin: 0 0 10px 0; color: var(--text-dim); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  th, td { padding: 5px 7px; text-align: right; border-bottom: 1px solid var(--panel-border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--text-dim); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  .table-scroll { max-height: 360px; overflow-y: auto; }
+  .role-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 0.7rem; font-weight: 700;
+  }
+  .role-badge.RIGHT_LEG { background: #2c4a80; color: #bcd4ff; }
+  .role-badge.LEFT_LEG  { background: #7a3a2c; color: #ffd0bc; }
+  .role-badge.TORSO     { background: #2c7a4a; color: #bcffd4; }
+
+  #log {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    max-height: 110px;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+
+<h1>3-Sensor Gait Logger</h1>
+<div class="sub">BLE / Web Bluetooth &middot; Right Leg + Left Leg + Torso &middot; 200&nbsp;Hz each &middot; IST (UTC+5:30)</div>
+
+<div class="sensor-rows" id="sensorRows"></div>
+
+<div class="controls">
+  <button id="startBtn" disabled>▶ Start Recording</button>
+  <button id="stopBtn" disabled>■ Stop Recording</button>
+  <button id="refreshBtn">↻ Refresh Data</button>
+  <button id="downloadBtn">⬇ Download CSV</button>
+</div>
+
+<div class="stats">
+  <div class="stat good">
+    <div class="label">Rows Received (all)</div>
+    <div class="value" id="rowCount">0</div>
+  </div>
+  <div class="stat loss">
+    <div class="label">Data Loss (samples)</div>
+    <div class="value" id="lossCount">0</div>
+  </div>
+  <div class="stat">
+    <div class="label">Loss Rate</div>
+    <div class="value" id="lossRate">0.00%</div>
+  </div>
+  <div class="stat good">
+    <div class="label">Recovered (resent) pkts</div>
+    <div class="value" id="recoveredCount">0</div>
+  </div>
+</div>
+
+<div class="per-sensor-stats" id="perSensorStats"></div>
+
+<div class="panel">
+  <h2>LATEST SAMPLES (last 30, all sensors, most recent first)</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>IST Timestamp</th><th>Sensor</th><th>Seq</th>
+          <th>ax (g)</th><th>ay (g)</th><th>az (g)</th>
+          <th>gx (dps)</th><th>gy (dps)</th><th>gz (dps)</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>LOG</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+// ---- Must match the ESP32 sketch exactly ----
+const SERVICE_UUID     = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const TIME_CHAR_UUID    = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+const CONTROL_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const IMU_CHAR_UUID     = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";
+const ACK_CHAR_UUID     = "6e400005-b5a3-f393-e0a9-e50e24dcca9e";
+const ROLE_CHAR_UUID    = "6e400006-b5a3-f393-e0a9-e50e24dcca9e";
+
+const BATCH_SIZE       = 10;          // must match firmware BATCH_SIZE
+const IST_OFFSET_MS    = 19800000;    // +5:30
+const ACCEL_SCALE      = 1 / 16384;   // g per LSB @ +/-2g
+const GYRO_SCALE       = 1 / 131;     // dps per LSB @ +/-250dps
+const ACK_INTERVAL_MS  = 100;         // how often each board's watermark is acked
+                                       // (relaxed from 50ms: with 3 simultaneous BLE
+                                       // connections, halving the write traffic gives
+                                       // the phone/PC's radio scheduler more headroom
+                                       // to service all three fairly. Still well under
+                                       // the firmware's 150ms base resend timeout.)
+const STALL_THRESHOLD_MS = 2000;      // flag a connected sensor as stalled if it hasn't
+                                       // delivered a new packet in this long while recording
+
+const ROLES = ['RIGHT_LEG', 'LEFT_LEG', 'TORSO'];
+const ROLE_LABELS = { RIGHT_LEG: 'Right Leg', LEFT_LEG: 'Left Leg', TORSO: 'Torso' };
+
+// wraparound-safe seq compare (mirrors firmware's int16 cast trick)
+function seqDiff16(a, b) {
+  let d = (a - b) & 0xFFFF;
+  if (d > 32767) d -= 65536;
+  return d;
+}
+
+// Per-role connection + ARQ state. Each board is an independent BLE
+// peripheral with its own clock offset and its own sequence numbering,
+// so every piece of per-connection state is namespaced under sensors[role].
+const sensors = {};
+for (const role of ROLES) {
+  sensors[role] = {
+    role,
+    device: null, server: null,
+    timeChar: null, controlChar: null, imuChar: null, ackChar: null, roleChar: null,
+    connected: false,
+    epochBaseMs: 0,
+    ackWatermark: -1, receivedSeqSet: new Set(), maxSeenSeq: -1,
+    lastAckSent: -1, ackWriteBusy: false,
+    rowCount: 0, pktCount: 0, recoveredCount: 0,
+    recvFirstAt: null, recvLastAt: null,
+    stalled: false,
+  };
+}
+
+let samples = [];   // combined dataset across all sensors, each row tagged with `role`
+let recording = false;
+
+const $ = (id) => document.getElementById(id);
+
+function log(msg) {
+  const el = $('log');
+  const t = new Date().toLocaleTimeString();
+  el.textContent += `[${t}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function u64ToBytesLE(num) {
+  const buf = new ArrayBuffer(8);
+  const dv = new DataView(buf);
+  const lo = num >>> 0;
+  const hi = Math.floor(num / 4294967296) >>> 0;
+  dv.setUint32(0, lo, true);
+  dv.setUint32(4, hi, true);
+  return buf;
+}
+function bytesLEToU64(dv, offset) {
+  const lo = dv.getUint32(offset, true);
+  const hi = dv.getUint32(offset + 4, true);
+  return hi * 4294967296 + lo;
+}
+
+// ---------------- Sensor row UI ----------------
+function renderSensorRows() {
+  const container = $('sensorRows');
+  container.innerHTML = '';
+  for (const role of ROLES) {
+    const s = sensors[role];
+    const row = document.createElement('div');
+    row.className = 'sensor-row';
+    let dotClass = 'dot' + (s.connected ? (recording ? ' recording' : ' connected') : '');
+    if (s.connected && s.stalled) dotClass = 'dot'; // falls back to red - stalled = as good as disconnected right now
+    let info = s.connected
+      ? (s.device ? s.device.name : 'Connected') + (recording ? ' &middot; recording' : ' &middot; idle')
+      : 'Not connected';
+    if (s.connected && s.stalled) info = `⚠ STALLED - no data for >${(STALL_THRESHOLD_MS/1000).toFixed(0)}s`;
+    const btnHtml = s.connected
+      ? `<button class="row-btn disconnect" data-action="disconnect" data-role="${role}">Disconnect</button>`
+      : `<button class="row-btn" data-action="connect" data-role="${role}">Connect</button>`;
+    row.innerHTML = `
+      <div class="${dotClass}"></div>
+      <div class="name role-badge ${role}">${ROLE_LABELS[role]}</div>
+      <div class="info">${info}</div>
+      ${btnHtml}`;
+    container.appendChild(row);
+  }
+}
+renderSensorRows();
+
+// Delegated click handling for the per-row Connect/Disconnect buttons -
+// simpler than rebinding listeners every render.
+$('sensorRows').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-action]');
+  if (!btn) return;
+  const role = btn.dataset.role;
+  if (btn.dataset.action === 'connect') connectSensor(role);
+  else if (btn.dataset.action === 'disconnect') disconnectSensor(role);
+});
+
+// ---------------- Connect ----------------
+// `expectedRole` is which button the user clicked (e.g. "Connect Right
+// Leg"). We still trust the BOARD's own Role characteristic as the
+// source of truth for where the data actually gets filed - protects
+// against picking the wrong entry in the OS pairing dialog - but we can
+// now warn clearly if it doesn't match what the user intended to add.
+async function connectSensor(expectedRole) {
+  try {
+    if (!navigator.bluetooth) {
+      log('Web Bluetooth not supported in this browser (use Chrome/Edge on Android or desktop).');
+      return;
+    }
+    log(`Opening device picker for ${ROLE_LABELS[expectedRole]}...`);
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }]
+    });
+
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+
+    const timeChar    = await service.getCharacteristic(TIME_CHAR_UUID);
+    const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
+    const imuChar     = await service.getCharacteristic(IMU_CHAR_UUID);
+    const ackChar     = await service.getCharacteristic(ACK_CHAR_UUID);
+    const roleChar    = await service.getCharacteristic(ROLE_CHAR_UUID);
+
+    const roleVal = await roleChar.readValue();
+    const reportedRole = new TextDecoder().decode(roleVal).trim();
+
+    if (!ROLES.includes(reportedRole)) {
+      log(`Connected device reported unknown role "${reportedRole}" - ignoring.`);
+      device.gatt.disconnect();
+      return;
+    }
+
+    if (reportedRole !== expectedRole) {
+      log(`⚠ You clicked Connect ${ROLE_LABELS[expectedRole]}, but this board identifies as ` +
+          `${ROLE_LABELS[reportedRole]} (check its SENSOR_ROLE setting). Placing it in the ` +
+          `${ROLE_LABELS[reportedRole]} slot to keep data correctly labeled.`);
+    }
+
+    const slot = sensors[reportedRole];
+    if (slot.connected) {
+      log(`${ROLE_LABELS[reportedRole]} slot already connected - disconnecting previous device.`);
+      try { slot.device.gatt.disconnect(); } catch (e) {}
+    }
+
+    Object.assign(slot, {
+      device, server, timeChar, controlChar, imuChar, ackChar, roleChar,
+      connected: true,
+      ackWatermark: -1, receivedSeqSet: new Set(), maxSeenSeq: -1,
+      lastAckSent: -1, ackWriteBusy: false,
+    });
+
+    device.addEventListener('gattserverdisconnected', () => onDisconnected(reportedRole));
+    await imuChar.startNotifications();
+    imuChar.addEventListener('characteristicvaluechanged', (ev) => handlePacket(reportedRole, ev));
+
+    log(`Connected: ${ROLE_LABELS[reportedRole]} (${device.name}).`);
+    renderSensorRows();
+    updateButtons();
+  } catch (err) {
+    log('Connection failed: ' + err);
+  }
+}
+
+function disconnectSensor(role) {
+  const s = sensors[role];
+  if (!s.connected || !s.device) return;
+  try { s.device.gatt.disconnect(); } catch (e) {}
+  // onDisconnected() fires from the gattserverdisconnected event and
+  // updates state/UI; nothing further to do here.
+}
+
+function onDisconnected(role) {
+  const s = sensors[role];
+  s.connected = false;
+  log(`${ROLE_LABELS[role]} disconnected.`);
+  renderSensorRows();
+  updateButtons();
+}
+
+function connectedRoles() {
+  return ROLES.filter(r => sensors[r].connected);
+}
+
+function updateButtons() {
+  const anyConnected = connectedRoles().length > 0;
+  $('startBtn').disabled = !anyConnected || recording;
+  $('stopBtn').disabled = !recording;
+}
+
+// ---------------- Start/Stop ----------------
+async function startRecording() {
+  const roles = connectedRoles();
+  if (roles.length === 0) return;
+
+  // Capture ONE reference instant and fan it out to every connected
+  // board in quick succession, so all limbs' clocks stay tightly
+  // aligned (rather than each drifting by however long its own pairing
+  // took). A few ms of BLE write latency between boards is unavoidable
+  // but far tighter than syncing at separate connect times.
+  const syncInstant = Date.now();
+  for (const role of roles) {
+    const s = sensors[role];
+    try {
+      s.epochBaseMs = syncInstant;
+      await s.timeChar.writeValue(u64ToBytesLE(syncInstant));
+      try {
+        const val = await s.timeChar.readValue();
+        const istEpoch = bytesLEToU64(val, 0);
+        log(`${ROLE_LABELS[role]} confirmed IST: ${new Date(istEpoch).toLocaleString('en-IN', { hour12: false })}`);
+      } catch (e) { /* non-fatal */ }
+    } catch (e) {
+      log(`Time sync failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
+
+  for (const role of roles) {
+    const s = sensors[role];
+    s.recvFirstAt = null;
+    s.ackWatermark = -1;
+    s.receivedSeqSet.clear();
+    s.maxSeenSeq = -1;
+    s.lastAckSent = -1;
+    try {
+      await s.controlChar.writeValue(new Uint8Array([0x01]));
+    } catch (e) {
+      log(`Start command failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
+
+  recording = true;
+  for (const role of roles) sensors[role].stalled = false;
+  await acquireWakeLock();
+  renderSensorRows();
+  updateButtons();
+  log(`Recording started on: ${roles.map(r => ROLE_LABELS[r]).join(', ')}. ` +
+      `Keep this tab in the foreground for reliable delivery.`);
+}
+
+async function stopRecording() {
+  for (const role of connectedRoles()) {
+    const s = sensors[role];
+    try {
+      await s.controlChar.writeValue(new Uint8Array([0x00]));
+    } catch (e) {
+      log(`Stop command failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
+  recording = false;
+  releaseWakeLock();
+  for (const role of ROLES) sensors[role].stalled = false;
+  renderSensorRows();
+  updateButtons();
+  log('Recording stopped.');
+}
+
+// ---------------- Packet handling (per role) ----------------
+function handlePacket(role, event) {
+  const s = sensors[role];
+  const dv = event.target.value;
+  if (dv.byteLength < 7) return;
+
+  const seq         = dv.getUint16(0, true);
+  const count        = dv.getUint8(2);
+  const baseElapsed = dv.getUint32(3, true);
+
+  s.pktCount++;
+  s.recvLastAt = performance.now();
+  if (s.recvFirstAt === null) s.recvFirstAt = s.recvLastAt;
+
+  const alreadyHave = s.receivedSeqSet.has(seq) || seqDiff16(s.ackWatermark, seq) >= 0;
+  const isNew = !alreadyHave;
+
+  if (isNew) {
+    s.receivedSeqSet.add(seq);
+    if (s.maxSeenSeq === -1 || seqDiff16(seq, s.maxSeenSeq) > 0) s.maxSeenSeq = seq;
+
+    let offset = 7;
+    for (let i = 0; i < count; i++) {
+      if (offset + 13 > dv.byteLength) break;
+      const msOff = dv.getUint8(offset); offset += 1;
+      const ax = dv.getInt16(offset, true); offset += 2;
+      const ay = dv.getInt16(offset, true); offset += 2;
+      const az = dv.getInt16(offset, true); offset += 2;
+      const gx = dv.getInt16(offset, true); offset += 2;
+      const gy = dv.getInt16(offset, true); offset += 2;
+      const gz = dv.getInt16(offset, true); offset += 2;
+
+      const elapsedMs = baseElapsed + msOff;
+      const utcMs = s.epochBaseMs + elapsedMs;
+      const istMs = utcMs + IST_OFFSET_MS;
+
+      samples.push({
+        role, seq,
+        ts_utc_ms: utcMs,
+        ts_ist: new Date(istMs).toISOString().replace('Z', ''),
+        ax: +(ax * ACCEL_SCALE).toFixed(4),
+        ay: +(ay * ACCEL_SCALE).toFixed(4),
+        az: +(az * ACCEL_SCALE).toFixed(4),
+        gx: +(gx * GYRO_SCALE).toFixed(3),
+        gy: +(gy * GYRO_SCALE).toFixed(3),
+        gz: +(gz * GYRO_SCALE).toFixed(3)
+      });
+      s.rowCount++;
+    }
+
+    while (s.receivedSeqSet.has((s.ackWatermark + 1) & 0xFFFF)) {
+      s.ackWatermark = (s.ackWatermark + 1) & 0xFFFF;
+      s.receivedSeqSet.delete(s.ackWatermark);
+    }
+  } else {
+    s.recoveredCount++;
+  }
+
+  updateStats();
+}
+
+async function maybeSendAck(role) {
+  const s = sensors[role];
+  if (!s.connected || !s.ackChar || s.ackWriteBusy) return;
+  if (s.ackWatermark === s.lastAckSent || s.ackWatermark === -1) return;
+  s.ackWriteBusy = true;
+  const toSend = s.ackWatermark;
+  try {
+    const buf = new Uint8Array([toSend & 0xFF, (toSend >> 8) & 0xFF]);
+    if (s.ackChar.writeValueWithoutResponse) {
+      await s.ackChar.writeValueWithoutResponse(buf);
+    } else {
+      await s.ackChar.writeValue(buf);
+    }
+    s.lastAckSent = toSend;
+  } catch (e) {
+    // best-effort: firmware will resend on timeout regardless
+  } finally {
+    s.ackWriteBusy = false;
+  }
+}
+setInterval(() => {
+  if (!recording) return;
+  for (const role of connectedRoles()) maybeSendAck(role);
+}, ACK_INTERVAL_MS);
+
+// ---------------- Stall detection ----------------
+// A dead BLE link (screen lock, backgrounded tab, etc.) doesn't throw an
+// error - it just silently stops delivering packets. Without this, you
+// wouldn't know a sensor went quiet until you looked at the CSV
+// afterward. This surfaces it live, per sensor, within ~2 seconds.
+setInterval(() => {
+  if (!recording) return;
+  const now = performance.now();
+  let changed = false;
+  for (const role of connectedRoles()) {
+    const s = sensors[role];
+    const reference = s.recvLastAt !== null ? s.recvLastAt : s.recvFirstAt;
+    const sinceLast = reference !== null ? (now - reference) : 0;
+    const isStalled = sinceLast > STALL_THRESHOLD_MS;
+    if (isStalled && !s.stalled) {
+      s.stalled = true;
+      changed = true;
+      log(`⚠ ${ROLE_LABELS[role]} has sent no data for ${(sinceLast / 1000).toFixed(1)}s - ` +
+          `link may be stalled. Check the screen hasn't locked and this tab is in the foreground.`);
+    } else if (!isStalled && s.stalled) {
+      s.stalled = false;
+      changed = true;
+      log(`${ROLE_LABELS[role]} resumed after a stall.`);
+    }
+  }
+  if (changed) renderSensorRows();
+}, 1000);
+
+// ---------------- Screen Wake Lock ----------------
+// Keeps the screen (and, on most platforms, BLE activity) alive during
+// recording. This is the single highest-leverage fix for the "long
+// silent gap" failure mode: mobile OSes routinely suspend Bluetooth
+// once the screen locks. It does NOT prevent throttling if the user
+// switches away to a different app/tab entirely - keep this tab in the
+// foreground for reliable delivery.
+let wakeLock = null;
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) {
+    log('Screen Wake Lock API not supported in this browser - keep the screen on manually during recording.');
+    return;
+  }
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => log('Screen wake lock released.'));
+    log('Screen wake lock acquired - screen will stay on while recording.');
+  } catch (e) {
+    log('Could not acquire screen wake lock: ' + e);
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+// The wake lock is auto-released by the browser whenever the tab is
+// hidden; re-acquire it as soon as the tab becomes visible again mid-
+// recording (covers a brief app-switch-and-back, though a sustained
+// background period will still cause a gap - there's no API to prevent
+// that entirely).
+document.addEventListener('visibilitychange', async () => {
+  if (recording && document.visibilityState === 'visible' && wakeLock === null) {
+    await acquireWakeLock();
+  }
+});
+
+// ---------------- UI updates ----------------
+function updateStats() {
+  let totalRows = 0, totalPkts = 0, totalLoss = 0, totalRecovered = 0;
+  const perSensorEl = $('perSensorStats');
+  perSensorEl.innerHTML = '';
+
+  for (const role of ROLES) {
+    const s = sensors[role];
+    totalRows += s.rowCount;
+    totalPkts += s.pktCount;
+    totalRecovered += s.recoveredCount;
+
+    const totalExpectedPkts = s.maxSeenSeq === -1 ? 0 : seqDiff16(s.maxSeenSeq, s.ackWatermark);
+    const pendingPkts = Math.max(0, totalExpectedPkts - s.receivedSeqSet.size);
+    const lossSamples = pendingPkts * BATCH_SIZE;
+    totalLoss += lossSamples;
+
+    let rateHz = 0;
+    if (s.recvFirstAt !== null && s.recvLastAt !== null && s.recvLastAt > s.recvFirstAt) {
+      rateHz = s.rowCount / ((s.recvLastAt - s.recvFirstAt) / 1000);
+    }
+
+    const card = document.createElement('div');
+    card.className = 'mini-card';
+    card.innerHTML = `
+      <div class="title role-badge ${role}">${ROLE_LABELS[role]}</div>
+      <div class="row"><span>Rows</span><span>${s.rowCount.toLocaleString()}</span></div>
+      <div class="row"><span>Loss (samples)</span><span>${lossSamples.toLocaleString()}</span></div>
+      <div class="row"><span>Rate</span><span>${rateHz.toFixed(1)} Hz</span></div>
+      <div class="row"><span>Status</span><span>${s.connected ? (recording ? 'Recording' : 'Idle') : 'Disconnected'}</span></div>`;
+    perSensorEl.appendChild(card);
+  }
+
+  $('rowCount').textContent = totalRows.toLocaleString();
+  $('lossCount').textContent = totalLoss.toLocaleString();
+  $('recoveredCount').textContent = totalRecovered.toLocaleString();
+  const totalExpected = totalRows + totalLoss;
+  const lossPct = totalExpected > 0 ? (totalLoss / totalExpected * 100) : 0;
+  $('lossRate').textContent = lossPct.toFixed(2) + '%';
+}
+
+function renderTable() {
+  const tbody = $('tableBody');
+  tbody.innerHTML = '';
+  const last = samples.slice(-30).reverse();
+  for (const s of last) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${s.ts_ist}</td>
+      <td><span class="role-badge ${s.role}">${ROLE_LABELS[s.role]}</span></td>
+      <td>${s.seq}</td>
+      <td>${s.ax}</td><td>${s.ay}</td><td>${s.az}</td>
+      <td>${s.gx}</td><td>${s.gy}</td><td>${s.gz}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function refreshData() {
+  renderTable();
+  updateStats();
+  renderSensorRows();
+  log('View refreshed.');
+}
+
+// ---------------- CSV download ----------------
+function downloadCsv() {
+  if (samples.length === 0) {
+    log('No data to download yet.');
+    return;
+  }
+  // Long format: one row per (sensor, sample). Sorted by time then role,
+  // since each board free-runs on its own 200Hz clock and exact
+  // cross-board alignment is a resampling problem better left to
+  // analysis tooling than baked into the export.
+  const sorted = [...samples].sort((a, b) => a.ts_utc_ms - b.ts_utc_ms || a.role.localeCompare(b.role));
+  const header = 'role,seq,timestamp_ist,timestamp_utc_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n';
+  const rows = sorted.map(s =>
+    `${s.role},${s.seq},${s.ts_ist},${s.ts_utc_ms},${s.ax},${s.ay},${s.az},${s.gx},${s.gy},${s.gz}`
+  ).join('\n');
+  const csv = header + rows;
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  a.href = url;
+  a.download = `gait_capture_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  log(`Downloaded ${samples.length} rows (all sensors) as CSV.`);
+}
+
+// ---------------- Wire up buttons ----------------
+// (per-row Connect/Disconnect buttons are wired via delegation above)
+$('startBtn').addEventListener('click', startRecording);
+$('stopBtn').addEventListener('click', stopRecording);
+$('refreshBtn').addEventListener('click', refreshData);
+$('downloadBtn').addEventListener('click', downloadCsv);
+
+setInterval(() => { if (recording) renderTable(); }, 500);
+updateStats();
+updateButtons();
+
+if (!navigator.bluetooth) {
+  log('NOTE: Web Bluetooth requires Chrome/Edge and a secure context (HTTPS or localhost).');
+}
+</script>
+
+</body>
+</html>
