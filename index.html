@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>XIAO ESP32C3 IMU Logger (BLE)</title>
+<title>3-Sensor Gait Logger (BLE)</title>
 <style>
   :root {
     --bg: #0f1420;
@@ -28,7 +28,8 @@
   h1 { font-size: 1.3rem; margin: 0 0 4px 0; }
   .sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 18px; }
 
-  .status-bar {
+  .sensor-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .sensor-row {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -36,9 +37,18 @@
     background: var(--panel);
     border: 1px solid var(--panel-border);
     border-radius: 10px;
-    margin-bottom: 16px;
     font-size: 0.9rem;
   }
+  .sensor-row .name { font-weight: 600; width: 90px; flex-shrink: 0; }
+  .sensor-row .info { flex: 1; color: var(--text-dim); font-size: 0.8rem; }
+  .sensor-row .row-btn {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .sensor-row .row-btn.disconnect { border-color: var(--red); }
+  .sensor-row .row-btn.disconnect:hover:not(:disabled) { background: var(--red); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
   .dot.connected { background: var(--green); }
   .dot.recording { background: var(--amber); animation: pulse 1s infinite; }
@@ -48,7 +58,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
-    margin-bottom: 18px;
+    margin: 14px 0 18px 0;
   }
   button {
     background: var(--accent-dim);
@@ -72,7 +82,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
-    margin-bottom: 18px;
+    margin-bottom: 12px;
   }
   .stat {
     background: var(--panel);
@@ -85,6 +95,23 @@
   .stat.loss .value { color: var(--red); }
   .stat.good .value { color: var(--green); }
 
+  .per-sensor-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .mini-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.78rem;
+  }
+  .mini-card .title { font-weight: 700; margin-bottom: 6px; }
+  .mini-card .row { display: flex; justify-content: space-between; color: var(--text-dim); padding: 1px 0; }
+  .mini-card .row span:last-child { color: var(--text); }
+
   .panel {
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -94,16 +121,23 @@
   }
   .panel h2 { font-size: 0.9rem; margin: 0 0 10px 0; color: var(--text-dim); font-weight: 600; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-  th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--panel-border); white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+  th, td { padding: 5px 7px; text-align: right; border-bottom: 1px solid var(--panel-border); white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
+  th:nth-child(2), td:nth-child(2) { text-align: left; }
   th { color: var(--text-dim); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
   .table-scroll { max-height: 360px; overflow-y: auto; }
+  .role-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 0.7rem; font-weight: 700;
+  }
+  .role-badge.RIGHT_LEG { background: #2c4a80; color: #bcd4ff; }
+  .role-badge.LEFT_LEG  { background: #7a3a2c; color: #ffd0bc; }
+  .role-badge.TORSO     { background: #2c7a4a; color: #bcffd4; }
 
   #log {
     font-size: 0.75rem;
     color: var(--text-dim);
-    max-height: 100px;
+    max-height: 110px;
     overflow-y: auto;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     white-space: pre-wrap;
@@ -112,16 +146,12 @@
 </head>
 <body>
 
-<h1>XIAO ESP32C3 IMU Logger</h1>
-<div class="sub">BLE / Web Bluetooth &middot; 200&nbsp;Hz MPU6050 stream &middot; timestamps in IST (UTC+5:30)</div>
+<h1>3-Sensor Gait Logger</h1>
+<div class="sub">BLE / Web Bluetooth &middot; Right Leg + Left Leg + Torso &middot; 200&nbsp;Hz each &middot; IST (UTC+5:30)</div>
 
-<div class="status-bar">
-  <div id="statusDot" class="dot"></div>
-  <span id="statusText">Disconnected</span>
-</div>
+<div class="sensor-rows" id="sensorRows"></div>
 
 <div class="controls">
-  <button id="connectBtn">🔗 Connect to Sensor</button>
   <button id="startBtn" disabled>▶ Start Recording</button>
   <button id="stopBtn" disabled>■ Stop Recording</button>
   <button id="refreshBtn">↻ Refresh Data</button>
@@ -130,12 +160,8 @@
 
 <div class="stats">
   <div class="stat good">
-    <div class="label">Rows Received</div>
+    <div class="label">Rows Received (all)</div>
     <div class="value" id="rowCount">0</div>
-  </div>
-  <div class="stat">
-    <div class="label">Packets Received</div>
-    <div class="value" id="pktCount">0</div>
   </div>
   <div class="stat loss">
     <div class="label">Data Loss (samples)</div>
@@ -149,23 +175,17 @@
     <div class="label">Recovered (resent) pkts</div>
     <div class="value" id="recoveredCount">0</div>
   </div>
-  <div class="stat">
-    <div class="label">Effective Rate</div>
-    <div class="value" id="rateHz">0.0 Hz</div>
-  </div>
-  <div class="stat">
-    <div class="label">Device IST (confirmed)</div>
-    <div class="value" id="deviceIst" style="font-size:0.95rem;">—</div>
-  </div>
 </div>
 
+<div class="per-sensor-stats" id="perSensorStats"></div>
+
 <div class="panel">
-  <h2>LATEST SAMPLES (last 25)</h2>
+  <h2>LATEST SAMPLES (last 30, all sensors, most recent first)</h2>
   <div class="table-scroll">
     <table>
       <thead>
         <tr>
-          <th>IST Timestamp</th><th>Seq</th>
+          <th>IST Timestamp</th><th>Sensor</th><th>Seq</th>
           <th>ax (g)</th><th>ay (g)</th><th>az (g)</th>
           <th>gx (dps)</th><th>gy (dps)</th><th>gz (dps)</th>
         </tr>
@@ -187,40 +207,44 @@ const TIME_CHAR_UUID    = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 const CONTROL_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 const IMU_CHAR_UUID     = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";
 const ACK_CHAR_UUID     = "6e400005-b5a3-f393-e0a9-e50e24dcca9e";
+const ROLE_CHAR_UUID    = "6e400006-b5a3-f393-e0a9-e50e24dcca9e";
 
 const BATCH_SIZE       = 10;          // must match firmware BATCH_SIZE
 const IST_OFFSET_MS    = 19800000;    // +5:30
 const ACCEL_SCALE      = 1 / 16384;   // g per LSB @ +/-2g
 const GYRO_SCALE       = 1 / 131;     // dps per LSB @ +/-250dps
-const ACK_INTERVAL_MS  = 50;          // how often we write back our ack watermark
+const ACK_INTERVAL_MS  = 50;          // how often each board's watermark is acked
 
-let device = null, server = null;
-let timeChar = null, controlChar = null, imuChar = null, ackChar = null;
+const ROLES = ['RIGHT_LEG', 'LEFT_LEG', 'TORSO'];
+const ROLE_LABELS = { RIGHT_LEG: 'Right Leg', LEFT_LEG: 'Left Leg', TORSO: 'Torso' };
 
-let epochBaseMs = 0;      // UTC epoch ms sent at sync
-let samples = [];         // full recorded dataset (for CSV export)
-let rowCount = 0, pktCount = 0, recoveredCount = 0;
-let recvFirstAt = null, recvLastAt = null;
-let recording = false;
-
-// --- ARQ / dedup state (must mirror the firmware's ack-watermark protocol) ---
-// ackWatermark: highest seq we have CONTIGUOUSLY received (-1 = none yet).
-// receivedSeqSet: seqs received that are ahead of the watermark but leave
-// a hole behind them (i.e. still waiting on something older) - once the
-// hole fills, they get folded into the watermark and removed from the set.
-let ackWatermark = -1;
-let receivedSeqSet = new Set();
-let maxSeenSeq = -1;
-let lastAckSent = -1;
-let ackWriteBusy = false;
-
-// wraparound-safe seq compare (mirrors firmware's int16 cast trick):
-// returns >0 if a is "ahead of" b.
+// wraparound-safe seq compare (mirrors firmware's int16 cast trick)
 function seqDiff16(a, b) {
   let d = (a - b) & 0xFFFF;
   if (d > 32767) d -= 65536;
   return d;
 }
+
+// Per-role connection + ARQ state. Each board is an independent BLE
+// peripheral with its own clock offset and its own sequence numbering,
+// so every piece of per-connection state is namespaced under sensors[role].
+const sensors = {};
+for (const role of ROLES) {
+  sensors[role] = {
+    role,
+    device: null, server: null,
+    timeChar: null, controlChar: null, imuChar: null, ackChar: null, roleChar: null,
+    connected: false,
+    epochBaseMs: 0,
+    ackWatermark: -1, receivedSeqSet: new Set(), maxSeenSeq: -1,
+    lastAckSent: -1, ackWriteBusy: false,
+    rowCount: 0, pktCount: 0, recoveredCount: 0,
+    recvFirstAt: null, recvLastAt: null,
+  };
+}
+
+let samples = [];   // combined dataset across all sensors, each row tagged with `role`
+let recording = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -231,14 +255,7 @@ function log(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
-function setStatus(text, connected, isRecording) {
-  $('statusText').textContent = text;
-  const dot = $('statusDot');
-  dot.className = 'dot' + (isRecording ? ' recording' : (connected ? ' connected' : ''));
-}
-
 function u64ToBytesLE(num) {
-  // num is a JS number (safe up to 2^53), split into two 32-bit halves
   const buf = new ArrayBuffer(8);
   const dv = new DataView(buf);
   const lo = num >>> 0;
@@ -247,121 +264,220 @@ function u64ToBytesLE(num) {
   dv.setUint32(4, hi, true);
   return buf;
 }
-
 function bytesLEToU64(dv, offset) {
   const lo = dv.getUint32(offset, true);
   const hi = dv.getUint32(offset + 4, true);
   return hi * 4294967296 + lo;
 }
 
+// ---------------- Sensor row UI ----------------
+function renderSensorRows() {
+  const container = $('sensorRows');
+  container.innerHTML = '';
+  for (const role of ROLES) {
+    const s = sensors[role];
+    const row = document.createElement('div');
+    row.className = 'sensor-row';
+    const dotClass = 'dot' + (s.connected ? (recording ? ' recording' : ' connected') : '');
+    const info = s.connected
+      ? (s.device ? s.device.name : 'Connected') + (recording ? ' &middot; recording' : ' &middot; idle')
+      : 'Not connected';
+    const btnHtml = s.connected
+      ? `<button class="row-btn disconnect" data-action="disconnect" data-role="${role}">Disconnect</button>`
+      : `<button class="row-btn" data-action="connect" data-role="${role}">Connect</button>`;
+    row.innerHTML = `
+      <div class="${dotClass}"></div>
+      <div class="name role-badge ${role}">${ROLE_LABELS[role]}</div>
+      <div class="info">${info}</div>
+      ${btnHtml}`;
+    container.appendChild(row);
+  }
+}
+renderSensorRows();
+
+// Delegated click handling for the per-row Connect/Disconnect buttons -
+// simpler than rebinding listeners every render.
+$('sensorRows').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-action]');
+  if (!btn) return;
+  const role = btn.dataset.role;
+  if (btn.dataset.action === 'connect') connectSensor(role);
+  else if (btn.dataset.action === 'disconnect') disconnectSensor(role);
+});
+
 // ---------------- Connect ----------------
-async function connectSensor() {
+// `expectedRole` is which button the user clicked (e.g. "Connect Right
+// Leg"). We still trust the BOARD's own Role characteristic as the
+// source of truth for where the data actually gets filed - protects
+// against picking the wrong entry in the OS pairing dialog - but we can
+// now warn clearly if it doesn't match what the user intended to add.
+async function connectSensor(expectedRole) {
   try {
     if (!navigator.bluetooth) {
       log('Web Bluetooth not supported in this browser (use Chrome/Edge on Android or desktop).');
       return;
     }
-    log('Requesting device...');
-    device = await navigator.bluetooth.requestDevice({
+    log(`Opening device picker for ${ROLE_LABELS[expectedRole]}...`);
+    const device = await navigator.bluetooth.requestDevice({
       filters: [{ services: [SERVICE_UUID] }]
     });
-    device.addEventListener('gattserverdisconnected', onDisconnected);
 
-    log('Connecting GATT...');
-    server = await device.gatt.connect();
+    const server = await device.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
 
-    timeChar    = await service.getCharacteristic(TIME_CHAR_UUID);
-    controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
-    imuChar     = await service.getCharacteristic(IMU_CHAR_UUID);
-    ackChar     = await service.getCharacteristic(ACK_CHAR_UUID);
+    const timeChar    = await service.getCharacteristic(TIME_CHAR_UUID);
+    const controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
+    const imuChar     = await service.getCharacteristic(IMU_CHAR_UUID);
+    const ackChar     = await service.getCharacteristic(ACK_CHAR_UUID);
+    const roleChar    = await service.getCharacteristic(ROLE_CHAR_UUID);
 
-    await imuChar.startNotifications();
-    imuChar.addEventListener('characteristicvaluechanged', handlePacket);
+    const roleVal = await roleChar.readValue();
+    const reportedRole = new TextDecoder().decode(roleVal).trim();
 
-    // Time sync: send current UTC epoch ms
-    epochBaseMs = Date.now();
-    await timeChar.writeValue(u64ToBytesLE(epochBaseMs));
-
-    // Read back device-confirmed IST (device echoes IST epoch on write)
-    try {
-      const val = await timeChar.readValue();
-      const istEpoch = bytesLEToU64(val, 0);
-      $('deviceIst').textContent = new Date(istEpoch).toLocaleString('en-IN', { hour12: false });
-    } catch (e) {
-      log('Could not read back device IST confirmation: ' + e);
+    if (!ROLES.includes(reportedRole)) {
+      log(`Connected device reported unknown role "${reportedRole}" - ignoring.`);
+      device.gatt.disconnect();
+      return;
     }
 
-    setStatus('Connected & time synced', true, false);
-    $('connectBtn').disabled = true;
-    $('startBtn').disabled = false;
-    $('stopBtn').disabled = true;
-    log('Connected and time synced (UTC epoch ' + epochBaseMs + ' ms).');
+    if (reportedRole !== expectedRole) {
+      log(`⚠ You clicked Connect ${ROLE_LABELS[expectedRole]}, but this board identifies as ` +
+          `${ROLE_LABELS[reportedRole]} (check its SENSOR_ROLE setting). Placing it in the ` +
+          `${ROLE_LABELS[reportedRole]} slot to keep data correctly labeled.`);
+    }
+
+    const slot = sensors[reportedRole];
+    if (slot.connected) {
+      log(`${ROLE_LABELS[reportedRole]} slot already connected - disconnecting previous device.`);
+      try { slot.device.gatt.disconnect(); } catch (e) {}
+    }
+
+    Object.assign(slot, {
+      device, server, timeChar, controlChar, imuChar, ackChar, roleChar,
+      connected: true,
+      ackWatermark: -1, receivedSeqSet: new Set(), maxSeenSeq: -1,
+      lastAckSent: -1, ackWriteBusy: false,
+    });
+
+    device.addEventListener('gattserverdisconnected', () => onDisconnected(reportedRole));
+    await imuChar.startNotifications();
+    imuChar.addEventListener('characteristicvaluechanged', (ev) => handlePacket(reportedRole, ev));
+
+    log(`Connected: ${ROLE_LABELS[reportedRole]} (${device.name}).`);
+    renderSensorRows();
+    updateButtons();
   } catch (err) {
     log('Connection failed: ' + err);
   }
 }
 
-function onDisconnected() {
-  setStatus('Disconnected', false, false);
-  $('connectBtn').disabled = false;
-  $('startBtn').disabled = true;
-  $('stopBtn').disabled = true;
-  recording = false;
-  log('Device disconnected.');
+function disconnectSensor(role) {
+  const s = sensors[role];
+  if (!s.connected || !s.device) return;
+  try { s.device.gatt.disconnect(); } catch (e) {}
+  // onDisconnected() fires from the gattserverdisconnected event and
+  // updates state/UI; nothing further to do here.
+}
+
+function onDisconnected(role) {
+  const s = sensors[role];
+  s.connected = false;
+  log(`${ROLE_LABELS[role]} disconnected.`);
+  renderSensorRows();
+  updateButtons();
+}
+
+function connectedRoles() {
+  return ROLES.filter(r => sensors[r].connected);
+}
+
+function updateButtons() {
+  const anyConnected = connectedRoles().length > 0;
+  $('startBtn').disabled = !anyConnected || recording;
+  $('stopBtn').disabled = !recording;
 }
 
 // ---------------- Start/Stop ----------------
 async function startRecording() {
-  if (!controlChar) return;
-  await controlChar.writeValue(new Uint8Array([0x01]));
+  const roles = connectedRoles();
+  if (roles.length === 0) return;
+
+  // Capture ONE reference instant and fan it out to every connected
+  // board in quick succession, so all limbs' clocks stay tightly
+  // aligned (rather than each drifting by however long its own pairing
+  // took). A few ms of BLE write latency between boards is unavoidable
+  // but far tighter than syncing at separate connect times.
+  const syncInstant = Date.now();
+  for (const role of roles) {
+    const s = sensors[role];
+    try {
+      s.epochBaseMs = syncInstant;
+      await s.timeChar.writeValue(u64ToBytesLE(syncInstant));
+      try {
+        const val = await s.timeChar.readValue();
+        const istEpoch = bytesLEToU64(val, 0);
+        log(`${ROLE_LABELS[role]} confirmed IST: ${new Date(istEpoch).toLocaleString('en-IN', { hour12: false })}`);
+      } catch (e) { /* non-fatal */ }
+    } catch (e) {
+      log(`Time sync failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
+
+  for (const role of roles) {
+    const s = sensors[role];
+    s.recvFirstAt = null;
+    s.ackWatermark = -1;
+    s.receivedSeqSet.clear();
+    s.maxSeenSeq = -1;
+    s.lastAckSent = -1;
+    try {
+      await s.controlChar.writeValue(new Uint8Array([0x01]));
+    } catch (e) {
+      log(`Start command failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
+
   recording = true;
-  recvFirstAt = null;
-  // Firmware resets its seq counters on start -> mirror that here so our
-  // watermark/dedup state lines up with the new session.
-  ackWatermark = -1;
-  receivedSeqSet.clear();
-  maxSeenSeq = -1;
-  lastAckSent = -1;
-  setStatus('Recording...', true, true);
-  $('startBtn').disabled = true;
-  $('stopBtn').disabled = false;
-  log('Start command sent.');
+  renderSensorRows();
+  updateButtons();
+  log(`Recording started on: ${roles.map(r => ROLE_LABELS[r]).join(', ')}.`);
 }
 
 async function stopRecording() {
-  if (!controlChar) return;
-  await controlChar.writeValue(new Uint8Array([0x00]));
+  for (const role of connectedRoles()) {
+    const s = sensors[role];
+    try {
+      await s.controlChar.writeValue(new Uint8Array([0x00]));
+    } catch (e) {
+      log(`Stop command failed for ${ROLE_LABELS[role]}: ${e}`);
+    }
+  }
   recording = false;
-  setStatus('Connected (idle)', true, false);
-  $('startBtn').disabled = false;
-  $('stopBtn').disabled = true;
-  log('Stop command sent.');
+  renderSensorRows();
+  updateButtons();
+  log('Recording stopped.');
 }
 
-// ---------------- Packet handling ----------------
-function handlePacket(event) {
-  const dv = event.target.value; // DataView
+// ---------------- Packet handling (per role) ----------------
+function handlePacket(role, event) {
+  const s = sensors[role];
+  const dv = event.target.value;
   if (dv.byteLength < 7) return;
 
   const seq         = dv.getUint16(0, true);
   const count        = dv.getUint8(2);
   const baseElapsed = dv.getUint32(3, true);
 
-  pktCount++;
-  recvLastAt = performance.now();
-  if (recvFirstAt === null) recvFirstAt = recvLastAt;
+  s.pktCount++;
+  s.recvLastAt = performance.now();
+  if (s.recvFirstAt === null) s.recvFirstAt = s.recvLastAt;
 
-  // --- dedup + contiguous-watermark tracking ---
-  // A packet is "new" if we haven't already folded it into the watermark
-  // and haven't already got it sitting in the pending set (this catches
-  // firmware retransmissions, which arrive with the SAME seq).
-  const alreadyHave = receivedSeqSet.has(seq) || seqDiff16(ackWatermark, seq) >= 0;
+  const alreadyHave = s.receivedSeqSet.has(seq) || seqDiff16(s.ackWatermark, seq) >= 0;
   const isNew = !alreadyHave;
 
   if (isNew) {
-    receivedSeqSet.add(seq);
-    if (maxSeenSeq === -1 || seqDiff16(seq, maxSeenSeq) > 0) maxSeenSeq = seq;
+    s.receivedSeqSet.add(seq);
+    if (s.maxSeenSeq === -1 || seqDiff16(seq, s.maxSeenSeq) > 0) s.maxSeenSeq = seq;
 
     let offset = 7;
     for (let i = 0; i < count; i++) {
@@ -375,11 +491,11 @@ function handlePacket(event) {
       const gz = dv.getInt16(offset, true); offset += 2;
 
       const elapsedMs = baseElapsed + msOff;
-      const utcMs = epochBaseMs + elapsedMs;
+      const utcMs = s.epochBaseMs + elapsedMs;
       const istMs = utcMs + IST_OFFSET_MS;
 
       samples.push({
-        seq,
+        role, seq,
         ts_utc_ms: utcMs,
         ts_ist: new Date(istMs).toISOString().replace('Z', ''),
         ax: +(ax * ACCEL_SCALE).toFixed(4),
@@ -389,72 +505,95 @@ function handlePacket(event) {
         gy: +(gy * GYRO_SCALE).toFixed(3),
         gz: +(gz * GYRO_SCALE).toFixed(3)
       });
-      rowCount++;
+      s.rowCount++;
     }
 
-    // Fold contiguous run into the watermark, freeing memory as we go.
-    while (receivedSeqSet.has((ackWatermark + 1) & 0xFFFF)) {
-      ackWatermark = (ackWatermark + 1) & 0xFFFF;
-      receivedSeqSet.delete(ackWatermark);
+    while (s.receivedSeqSet.has((s.ackWatermark + 1) & 0xFFFF)) {
+      s.ackWatermark = (s.ackWatermark + 1) & 0xFFFF;
+      s.receivedSeqSet.delete(s.ackWatermark);
     }
   } else {
-    // Duplicate arrival = a firmware retransmission that we'd already
-    // processed (can happen if our earlier ack write raced the resend
-    // timeout). Not double-counted, but confirms the ARQ layer is alive.
-    recoveredCount++;
+    s.recoveredCount++;
   }
 
   updateStats();
 }
 
-// Periodically tell the firmware the highest seq we have contiguously
-// received, so it can retire that data and stop tracking it for resend.
-// Write-without-response, rate-limited, and never overlapped.
-async function maybeSendAck() {
-  if (!ackChar || ackWriteBusy) return;
-  if (ackWatermark === lastAckSent || ackWatermark === -1) return;
-  ackWriteBusy = true;
-  const toSend = ackWatermark;
+async function maybeSendAck(role) {
+  const s = sensors[role];
+  if (!s.connected || !s.ackChar || s.ackWriteBusy) return;
+  if (s.ackWatermark === s.lastAckSent || s.ackWatermark === -1) return;
+  s.ackWriteBusy = true;
+  const toSend = s.ackWatermark;
   try {
     const buf = new Uint8Array([toSend & 0xFF, (toSend >> 8) & 0xFF]);
-    if (ackChar.writeValueWithoutResponse) {
-      await ackChar.writeValueWithoutResponse(buf);
+    if (s.ackChar.writeValueWithoutResponse) {
+      await s.ackChar.writeValueWithoutResponse(buf);
     } else {
-      await ackChar.writeValue(buf);
+      await s.ackChar.writeValue(buf);
     }
-    lastAckSent = toSend;
+    s.lastAckSent = toSend;
   } catch (e) {
-    // Best-effort: a dropped ack just means firmware will resend after
-    // its timeout and we'll ack again next cycle - self-healing.
+    // best-effort: firmware will resend on timeout regardless
   } finally {
-    ackWriteBusy = false;
+    s.ackWriteBusy = false;
   }
 }
-setInterval(() => { if (recording) maybeSendAck(); }, ACK_INTERVAL_MS);
+setInterval(() => {
+  if (!recording) return;
+  for (const role of connectedRoles()) maybeSendAck(role);
+}, ACK_INTERVAL_MS);
 
 // ---------------- UI updates ----------------
 function updateStats() {
-  $('rowCount').textContent = rowCount.toLocaleString();
-  $('pktCount').textContent = pktCount.toLocaleString();
-  $('lossCount').textContent = lostCount.toLocaleString();
+  let totalRows = 0, totalPkts = 0, totalLoss = 0, totalRecovered = 0;
+  const perSensorEl = $('perSensorStats');
+  perSensorEl.innerHTML = '';
 
-  const totalExpected = rowCount + lostCount;
-  const lossPct = totalExpected > 0 ? (lostCount / totalExpected * 100) : 0;
-  $('lossRate').textContent = lossPct.toFixed(2) + '%';
+  for (const role of ROLES) {
+    const s = sensors[role];
+    totalRows += s.rowCount;
+    totalPkts += s.pktCount;
+    totalRecovered += s.recoveredCount;
 
-  if (recvFirstAt !== null && recvLastAt !== null && recvLastAt > recvFirstAt) {
-    const rate = rowCount / ((recvLastAt - recvFirstAt) / 1000);
-    $('rateHz').textContent = rate.toFixed(1) + ' Hz';
+    const totalExpectedPkts = s.maxSeenSeq === -1 ? 0 : seqDiff16(s.maxSeenSeq, s.ackWatermark);
+    const pendingPkts = Math.max(0, totalExpectedPkts - s.receivedSeqSet.size);
+    const lossSamples = pendingPkts * BATCH_SIZE;
+    totalLoss += lossSamples;
+
+    let rateHz = 0;
+    if (s.recvFirstAt !== null && s.recvLastAt !== null && s.recvLastAt > s.recvFirstAt) {
+      rateHz = s.rowCount / ((s.recvLastAt - s.recvFirstAt) / 1000);
+    }
+
+    const card = document.createElement('div');
+    card.className = 'mini-card';
+    card.innerHTML = `
+      <div class="title role-badge ${role}">${ROLE_LABELS[role]}</div>
+      <div class="row"><span>Rows</span><span>${s.rowCount.toLocaleString()}</span></div>
+      <div class="row"><span>Loss (samples)</span><span>${lossSamples.toLocaleString()}</span></div>
+      <div class="row"><span>Rate</span><span>${rateHz.toFixed(1)} Hz</span></div>
+      <div class="row"><span>Status</span><span>${s.connected ? (recording ? 'Recording' : 'Idle') : 'Disconnected'}</span></div>`;
+    perSensorEl.appendChild(card);
   }
+
+  $('rowCount').textContent = totalRows.toLocaleString();
+  $('lossCount').textContent = totalLoss.toLocaleString();
+  $('recoveredCount').textContent = totalRecovered.toLocaleString();
+  const totalExpected = totalRows + totalLoss;
+  const lossPct = totalExpected > 0 ? (totalLoss / totalExpected * 100) : 0;
+  $('lossRate').textContent = lossPct.toFixed(2) + '%';
 }
 
 function renderTable() {
   const tbody = $('tableBody');
   tbody.innerHTML = '';
-  const last = samples.slice(-25).reverse();
+  const last = samples.slice(-30).reverse();
   for (const s of last) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${s.ts_ist}</td><td>${s.seq}</td>
+    tr.innerHTML = `<td>${s.ts_ist}</td>
+      <td><span class="role-badge ${s.role}">${ROLE_LABELS[s.role]}</span></td>
+      <td>${s.seq}</td>
       <td>${s.ax}</td><td>${s.ay}</td><td>${s.az}</td>
       <td>${s.gx}</td><td>${s.gy}</td><td>${s.gz}</td>`;
     tbody.appendChild(tr);
@@ -464,6 +603,7 @@ function renderTable() {
 function refreshData() {
   renderTable();
   updateStats();
+  renderSensorRows();
   log('View refreshed.');
 }
 
@@ -473,9 +613,14 @@ function downloadCsv() {
     log('No data to download yet.');
     return;
   }
-  const header = 'seq,timestamp_ist,timestamp_utc_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n';
-  const rows = samples.map(s =>
-    `${s.seq},${s.ts_ist},${s.ts_utc_ms},${s.ax},${s.ay},${s.az},${s.gx},${s.gy},${s.gz}`
+  // Long format: one row per (sensor, sample). Sorted by time then role,
+  // since each board free-runs on its own 200Hz clock and exact
+  // cross-board alignment is a resampling problem better left to
+  // analysis tooling than baked into the export.
+  const sorted = [...samples].sort((a, b) => a.ts_utc_ms - b.ts_utc_ms || a.role.localeCompare(b.role));
+  const header = 'role,seq,timestamp_ist,timestamp_utc_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n';
+  const rows = sorted.map(s =>
+    `${s.role},${s.seq},${s.ts_ist},${s.ts_utc_ms},${s.ax},${s.ay},${s.az},${s.gx},${s.gy},${s.gz}`
   ).join('\n');
   const csv = header + rows;
 
@@ -484,24 +629,24 @@ function downloadCsv() {
   const a = document.createElement('a');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   a.href = url;
-  a.download = `imu_data_${stamp}.csv`;
+  a.download = `gait_capture_${stamp}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  log(`Downloaded ${samples.length} rows as CSV.`);
+  log(`Downloaded ${samples.length} rows (all sensors) as CSV.`);
 }
 
 // ---------------- Wire up buttons ----------------
-$('connectBtn').addEventListener('click', connectSensor);
+// (per-row Connect/Disconnect buttons are wired via delegation above)
 $('startBtn').addEventListener('click', startRecording);
 $('stopBtn').addEventListener('click', stopRecording);
 $('refreshBtn').addEventListener('click', refreshData);
 $('downloadBtn').addEventListener('click', downloadCsv);
 
-// Periodic light refresh of the table while recording (keeps UI live
-// without re-rendering on every single packet, which is 20x/sec).
 setInterval(() => { if (recording) renderTable(); }, 500);
+updateStats();
+updateButtons();
 
 if (!navigator.bluetooth) {
   log('NOTE: Web Bluetooth requires Chrome/Edge and a secure context (HTTPS or localhost).');
